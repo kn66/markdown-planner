@@ -35,6 +35,7 @@ Expose these from your `helix.scm`:
                   markdown-planner-agenda-all
                   markdown-planner-outline
                   markdown-planner-select-subtree
+                  markdown-planner-activate
                   markdown-planner-install-keybindings
                   markdown-planner-install-folds))
 
@@ -59,10 +60,9 @@ Expose these from your `helix.scm`:
          markdown-planner-agenda-all
          markdown-planner-outline
          markdown-planner-select-subtree
+         markdown-planner-activate
          markdown-planner-install-keybindings
          markdown-planner-install-folds)
-
-(markdown-planner-install-keybindings)
 ```
 
 Then reload the Steel config or restart Helix.
@@ -87,24 +87,38 @@ Available commands:
 :markdown-planner-agenda-all
 :markdown-planner-outline
 :markdown-planner-select-subtree
+:markdown-planner-activate
 :markdown-planner-install-keybindings
 :markdown-planner-install-folds
 ```
 
 ## Markdown Keybindings
 
-`:markdown-planner-install-keybindings` installs extension-specific Steel
-keymaps for `md`, `markdown`, `mdown`, `mkd`, and `mkdn` files. These bindings
-inherit the current global keymap, so call it after any custom global keybinding
-setup in your `helix.scm`.
+The plugin installs extension-specific Steel keymaps for `md`, `markdown`,
+`mdown`, `mkd`, and `mkdn` files when `helix.scm` is loaded. The bindings
+inherit the current global keymap. You can rerun
+`:markdown-planner-install-keybindings` if you change global keybindings later.
+The direct bindings follow org/markdown/outline editing conventions where
+possible: `S-right` and `RET` act on the current item, `TAB` selects the
+current subtree, and `z` keys are used for outline actions.
 
-The installed normal-mode bindings are under `<space> m`:
+The installed normal-mode bindings are:
 
 ```text
+S-right      toggle TODO/DONE
+RET          toggle TODO/DONE
+TAB          select current subtree
+S-TAB        open outline
+za           select current subtree
+zc           select current subtree
+zo           open outline
+zO           open outline
+zM           open outline
+zR           open outline
 <space> m t  toggle TODO/DONE
 <space> m c  capture task
 <space> m C  capture scheduled task
-<space> m s  insert schedule
+<space> m s  insert schedule from calendar
 <space> m a  agenda
 <space> m A  agenda including DONE/CANCELED
 <space> m o  outline
@@ -189,7 +203,23 @@ Use a specific file with:
 :markdown-planner-capture-task-to-file notes/tasks.md Write release notes
 ```
 
-Scheduled captures use an org-style schedule token:
+Scheduled captures use an org-style schedule token. With no schedule argument,
+the command opens a calendar picker with today's date selected by default:
+
+```text
+:markdown-planner-capture-scheduled-task Write release notes
+```
+
+Select a date and the task is written as:
+
+```markdown
+- [ ] Write release notes SCHEDULED: <2026-07-05>
+```
+
+In the picker, arrow keys move by day or week, PageUp/PageDown moves by month,
+Home returns to today, Enter selects, and Esc closes.
+
+You can still pass an explicit date or date/time:
 
 ```text
 :markdown-planner-capture-scheduled-task "2026-07-05 09:00" Write release notes
@@ -201,8 +231,9 @@ This writes:
 - [ ] Write release notes SCHEDULED: <2026-07-05 09:00>
 ```
 
-`:markdown-planner-insert-schedule` inserts or replaces a schedule token on the current
-line:
+`:markdown-planner-insert-schedule` inserts or replaces a schedule token on the
+current line. With no arguments it opens the same calendar picker, defaulting to
+today's date. You can also pass an explicit date or date/time:
 
 ```text
 :markdown-planner-insert-schedule 2026-07-05 09:00

@@ -1,10 +1,22 @@
 (require-builtin steel/filesystem)
+(require-builtin steel/time)
 
 (provide markdown-planner-open-states
          markdown-planner-done-states
          markdown-planner-all-states
          markdown-planner-fold-query
          markdown-planner-schedule-token
+         markdown-planner-current-date-string
+         markdown-planner-date->string
+         markdown-planner-string->date
+         markdown-planner-date->serial
+         markdown-planner-serial->date
+         markdown-planner-date-add-days
+         markdown-planner-date-add-months
+         markdown-planner-weekday
+         markdown-planner-days-in-month
+         markdown-planner-calendar-cells
+         markdown-planner-schedule-like?
          markdown-planner-extract-schedule
          markdown-planner-set-line-schedule
          markdown-planner-capture-entry
@@ -41,6 +53,118 @@
 (section) @fold\n\
 (list_item) @fold\n\
 (block_quote) @fold\n")
+
+(define (two-digit number)
+  (if (< number 10)
+      (string-append "0" (number->string number))
+      (number->string number)))
+
+(define (markdown-planner-date->string date)
+  (string-append (number->string (list-ref date 0))
+                 "-"
+                 (two-digit (list-ref date 1))
+                 "-"
+                 (two-digit (list-ref date 2))))
+
+(define (markdown-planner-current-date-string)
+  (local-time/now! "%Y-%m-%d"))
+
+(define (valid-date? year month day)
+  (and (>= year 1)
+       (>= month 1)
+       (<= month 12)
+       (>= day 1)
+       (<= day (markdown-planner-days-in-month year month))))
+
+(define (markdown-planner-string->date value)
+  (let ([trimmed (trim value)])
+    (if (and (>= (string-length trimmed) 10)
+             (char=? (char-at trimmed 4) #\-)
+             (char=? (char-at trimmed 7) #\-))
+        (let ([year (string->number (substring trimmed 0 4))]
+              [month (string->number (substring trimmed 5 7))]
+              [day (string->number (substring trimmed 8 10))])
+          (if (and year month day (valid-date? year month day))
+              (list year month day)
+              #false))
+        #false)))
+
+(define (markdown-planner-date->serial date)
+  (let* ([month (list-ref date 1)]
+         [year (if (<= month 2) (- (list-ref date 0) 1) (list-ref date 0))]
+         [era (quotient year 400)]
+         [year-of-era (- year (* era 400))]
+         [month-prime (+ month (if (> month 2) -3 9))]
+         [day-of-year (+ (quotient (+ (* 153 month-prime) 2) 5)
+                         (list-ref date 2)
+                         -1)]
+         [day-of-era (+ (* year-of-era 365)
+                        (quotient year-of-era 4)
+                        (- (quotient year-of-era 100))
+                        day-of-year)])
+    (- (+ (* era 146097) day-of-era) 719468)))
+
+(define (markdown-planner-serial->date serial)
+  (let* ([days (+ serial 719468)]
+         [era (quotient days 146097)]
+         [day-of-era (- days (* era 146097))]
+         [year-of-era (quotient (+ (- day-of-era (quotient day-of-era 1460))
+                                   (quotient day-of-era 36524)
+                                   (- (quotient day-of-era 146096)))
+                                365)]
+         [year (+ year-of-era (* era 400))]
+         [day-of-year (- day-of-era
+                         (+ (* 365 year-of-era)
+                            (quotient year-of-era 4)
+                            (- (quotient year-of-era 100))))]
+         [month-prime (quotient (+ (* 5 day-of-year) 2) 153)]
+         [day (+ (- day-of-year (quotient (+ (* 153 month-prime) 2) 5)) 1)]
+         [month (+ month-prime (if (< month-prime 10) 3 -9))]
+         [adjusted-year (+ year (if (<= month 2) 1 0))])
+    (list adjusted-year month day)))
+
+(define (markdown-planner-date-add-days date amount)
+  (markdown-planner-serial->date (+ (markdown-planner-date->serial date) amount)))
+
+(define (markdown-planner-days-in-month year month)
+  (- (markdown-planner-date->serial
+      (if (= month 12)
+          (list (+ year 1) 1 1)
+          (list year (+ month 1) 1)))
+     (markdown-planner-date->serial (list year month 1))))
+
+(define (markdown-planner-date-add-months date amount)
+  (let* ([year (list-ref date 0)]
+         [month (list-ref date 1)]
+         [day (list-ref date 2)]
+         [month-index (+ (* year 12) (- month 1) amount)]
+         [new-year (quotient month-index 12)]
+         [new-month (+ (modulo month-index 12) 1)]
+         [new-day (min day (markdown-planner-days-in-month new-year new-month))])
+    (list new-year new-month new-day)))
+
+;; Sunday is 0, Saturday is 6.
+(define (markdown-planner-weekday date)
+  (modulo (+ (markdown-planner-date->serial date) 4) 7))
+
+(define (calendar-cell-for-index year month start-weekday days index)
+  (let ([day (- (+ index 1) start-weekday)])
+    (if (and (>= day 1) (<= day days))
+        (list year month day)
+        #false)))
+
+(define (calendar-cells-loop year month start-weekday days index)
+  (if (= index 42)
+      '()
+      (cons (calendar-cell-for-index year month start-weekday days index)
+            (calendar-cells-loop year month start-weekday days (+ index 1)))))
+
+(define (markdown-planner-calendar-cells year month)
+  (calendar-cells-loop year
+                       month
+                       (markdown-planner-weekday (list year month 1))
+                       (markdown-planner-days-in-month year month)
+                       0))
 
 (define (string-member? needle haystack)
   (cond [(null? haystack) #false]
@@ -117,6 +241,12 @@
            (string-append markdown-planner-schedule-marker " " value)]
           [else
            (string-append markdown-planner-schedule-marker " <" value ">")])))
+
+(define (markdown-planner-schedule-like? value)
+  (let ([trimmed (trim value)])
+    (or (starts-with? trimmed markdown-planner-schedule-marker)
+        (wrapped-timestamp? trimmed)
+        (if (markdown-planner-string->date trimmed) #true #false))))
 
 (define (schedule-token-value token)
   (let ([trimmed (trim token)])

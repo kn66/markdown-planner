@@ -3,6 +3,7 @@
 (require (prefix-in helix.static. "helix/static.scm"))
 (require (prefix-in helix.editor. "helix/editor.scm"))
 (require (prefix-in helix.misc. "helix/misc.scm"))
+(require (prefix-in helix.components. "helix/components.scm"))
 (require (only-in "helix/keymaps.scm"
                   keymap
                   deep-copy-global-keybindings))
@@ -30,6 +31,7 @@
          markdown-planner-agenda-all
          markdown-planner-outline
          markdown-planner-select-subtree
+         markdown-planner-activate
          markdown-planner-install-keybindings
          markdown-planner-install-folds)
 
@@ -91,6 +93,144 @@
 
 (define (prompt-input label callback)
   (helix.misc.push-component! (prompt label callback)))
+
+(define (calendar-two-char number)
+  (if (< number 10)
+      (string-append " " (number->string number))
+      (number->string number)))
+
+(define (calendar-current-date)
+  (let ([date (markdown-planner-string->date (markdown-planner-current-date-string))])
+    (if date
+        date
+        (error "failed to read current date"))))
+
+(define (calendar-window-area area)
+  (let* ([width (min 38 (helix.components.area-width area))]
+         [height (min 13 (helix.components.area-height area))]
+         [x (+ (helix.components.area-x area)
+               (quotient (max 0 (- (helix.components.area-width area) width)) 2))]
+         [y (+ (helix.components.area-y area)
+               (quotient (max 0 (- (helix.components.area-height area) height)) 2))])
+    (helix.components.area x y width height)))
+
+(define (calendar-header date)
+  (string-append (number->string (list-ref date 0))
+                 "-"
+                 (if (< (list-ref date 1) 10)
+                     (string-append "0" (number->string (list-ref date 1)))
+                     (number->string (list-ref date 1)))
+                 "  "
+                 (markdown-planner-date->string date)))
+
+(define (calendar-cell-style cell selected-date today-date)
+  (cond [(equal? cell selected-date)
+         (helix.components.style-with-reversed
+          (helix.components.style-with-bold (helix.components.style)))]
+        [(equal? cell today-date)
+         (helix.components.style-with-bold (helix.components.style))]
+        [else (helix.components.style)]))
+
+(define (calendar-render-cell frame base-x base-y cell selected-date today-date index)
+  (let* ([row (quotient index 7)]
+         [column (modulo index 7)]
+         [x (+ base-x (* column 5))]
+         [y (+ base-y row)])
+    (if cell
+        (helix.components.frame-set-string!
+         frame
+         x
+         y
+         (calendar-two-char (list-ref cell 2))
+         (calendar-cell-style cell selected-date today-date))
+        (helix.components.frame-set-string! frame x y "  " (helix.components.style)))))
+
+(define (calendar-render-cells frame x y cells selected-date today-date index)
+  (unless (null? cells)
+    (calendar-render-cell frame x y (car cells) selected-date today-date index)
+    (calendar-render-cells frame x y (cdr cells) selected-date today-date (+ index 1))))
+
+(define (markdown-planner-calendar-render state area frame)
+  (let* ([window (calendar-window-area area)]
+         [x (helix.components.area-x window)]
+         [y (helix.components.area-y window)]
+         [selected-date (vector-ref state 0)]
+         [today-date (vector-ref state 1)]
+         [year (list-ref selected-date 0)]
+         [month (list-ref selected-date 1)])
+    (helix.components.buffer/clear frame window)
+    (helix.components.block/render frame window (helix.components.block))
+    (helix.components.frame-set-string!
+     frame (+ x 2) (+ y 1) "Schedule" (helix.components.style-with-bold (helix.components.style)))
+    (helix.components.frame-set-string!
+     frame (+ x 2) (+ y 2) (calendar-header selected-date) (helix.components.style))
+    (helix.components.frame-set-string!
+     frame (+ x 2) (+ y 4) "Su   Mo   Tu   We   Th   Fr   Sa" (helix.components.style))
+    (calendar-render-cells
+     frame
+     (+ x 2)
+     (+ y 5)
+     (markdown-planner-calendar-cells year month)
+     selected-date
+     today-date
+     0)
+    (helix.components.frame-set-string!
+     frame (+ x 2) (+ y 11) "Enter selects, Esc closes" (helix.components.style))))
+
+(define (calendar-set-selected! state date)
+  (vector-set! state 0 date))
+
+(define (calendar-confirm! state)
+  ((vector-ref state 2) (markdown-planner-date->string (vector-ref state 0))))
+
+(define (markdown-planner-calendar-handle-event state event)
+  (cond [(helix.components.key-event-escape? event)
+         helix.components.event-result/close]
+        [(helix.components.key-event-enter? event)
+         (begin
+           (calendar-confirm! state)
+           helix.components.event-result/close)]
+        [(helix.components.key-event-left? event)
+         (begin
+           (calendar-set-selected! state (markdown-planner-date-add-days (vector-ref state 0) -1))
+           helix.components.event-result/consume)]
+        [(helix.components.key-event-right? event)
+         (begin
+           (calendar-set-selected! state (markdown-planner-date-add-days (vector-ref state 0) 1))
+           helix.components.event-result/consume)]
+        [(helix.components.key-event-up? event)
+         (begin
+           (calendar-set-selected! state (markdown-planner-date-add-days (vector-ref state 0) -7))
+           helix.components.event-result/consume)]
+        [(helix.components.key-event-down? event)
+         (begin
+           (calendar-set-selected! state (markdown-planner-date-add-days (vector-ref state 0) 7))
+           helix.components.event-result/consume)]
+        [(helix.components.key-event-page-up? event)
+         (begin
+           (calendar-set-selected! state (markdown-planner-date-add-months (vector-ref state 0) -1))
+           helix.components.event-result/consume)]
+        [(helix.components.key-event-page-down? event)
+         (begin
+           (calendar-set-selected! state (markdown-planner-date-add-months (vector-ref state 0) 1))
+           helix.components.event-result/consume)]
+        [(helix.components.key-event-home? event)
+         (begin
+           (calendar-set-selected! state (vector-ref state 1))
+           helix.components.event-result/consume)]
+        [else helix.components.event-result/ignore]))
+
+(define (open-schedule-calendar callback)
+  (let* ([today (calendar-current-date)]
+         [state (vector today today callback)]
+         [component (helix.components.new-component!
+                     "markdown-planner-calendar"
+                     state
+                     markdown-planner-calendar-render
+                     (hash "handle_event" markdown-planner-calendar-handle-event))])
+    (helix.components.overlaid component)
+    (helix.misc.push-component! component)
+    "schedule calendar opened"))
 
 ;;@doc
 ;; Toggle TODO/DONE state on the current Markdown heading, list item, or checkbox.
@@ -232,25 +372,34 @@
          (begin
            (prompt-input "Capture task: "
                          (lambda (title)
-                           (prompt-input "Schedule: "
-                                         (lambda (scheduled)
-                                           (capture-task-to-file
-                                            (markdown-planner-capture-file)
-                                            title
-                                            scheduled)))))
+                           (open-schedule-calendar
+                            (lambda (scheduled)
+                              (capture-task-to-file
+                               (markdown-planner-capture-file)
+                               title
+                               scheduled)))))
            "scheduled capture prompt opened")]
-        [(null? (cdr parts))
+        [(markdown-planner-schedule-like? (car parts))
          (begin
-           (prompt-input "Schedule: "
-                         (lambda (scheduled)
-                           (capture-task-to-file (markdown-planner-capture-file)
-                                                 (car parts)
-                                                 scheduled)))
-           "schedule prompt opened")]
+           (if (null? (cdr parts))
+               (begin
+                 (prompt-input "Capture task: "
+                               (lambda (title)
+                                 (capture-task-to-file (markdown-planner-capture-file)
+                                                       title
+                                                       (car parts))))
+                 "capture prompt opened")
+               (capture-task-to-file (markdown-planner-capture-file)
+                                     (join-command-parts (cdr parts))
+                                     (car parts))))]
         [else
-         (capture-task-to-file (markdown-planner-capture-file)
-                               (join-command-parts (cdr parts))
-                               (car parts))]))
+         (begin
+           (open-schedule-calendar
+            (lambda (scheduled)
+              (capture-task-to-file (markdown-planner-capture-file)
+                                    (join-command-parts parts)
+                                    scheduled)))
+           "schedule calendar opened")]))
 
 ;;@doc
 ;; Capture a scheduled Markdown TODO into a specific file.
@@ -265,10 +414,10 @@
 (define (markdown-planner-insert-schedule . schedule-parts)
   (if (null? schedule-parts)
       (begin
-        (prompt-input "Schedule: "
-                      (lambda (scheduled)
-                        (markdown-planner-insert-schedule scheduled)))
-        "schedule prompt opened")
+        (open-schedule-calendar
+         (lambda (scheduled)
+           (markdown-planner-insert-schedule scheduled)))
+        "schedule calendar opened")
       (let* ([content (current-buffer-text)]
              [line-number (current-line-number-1)]
              [line-info (markdown-planner-line-range content line-number)]
@@ -358,6 +507,17 @@
   (define (install-extension-keymap extension)
     (keymap (extension extension (inherit-from (deep-copy-global-keybindings)))
             (normal
+             (S-right ":markdown-planner-toggle-todo")
+             (ret ":markdown-planner-toggle-todo")
+             (tab ":markdown-planner-select-subtree")
+             (S-tab ":markdown-planner-outline")
+             (z
+              (a ":markdown-planner-select-subtree")
+              (c ":markdown-planner-select-subtree")
+              (o ":markdown-planner-outline")
+              (O ":markdown-planner-outline")
+              (M ":markdown-planner-outline")
+              (R ":markdown-planner-outline"))
              (space
               (m
                (t ":markdown-planner-toggle-todo")
@@ -374,8 +534,17 @@
                  (string-join markdown-planner-markdown-extensions ", ")))
 
 ;;@doc
+;; Activate markdown-planner integration after Helix has finished loading the
+;; surrounding Steel config.
+(define (markdown-planner-activate)
+  (helix.misc.enqueue-thread-local-callback markdown-planner-install-keybindings)
+  "scheduled markdown-planner keybinding installation")
+
+;;@doc
 ;; Install the Markdown tree-sitter folds query into the Helix config runtime.
 (define (markdown-planner-install-folds)
   (ensure-fold-query-directory)
   (write-file (fold-query-path) markdown-planner-fold-query)
   (string-append "installed markdown folds query: " (fold-query-path)))
+
+(markdown-planner-activate)
